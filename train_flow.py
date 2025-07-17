@@ -234,9 +234,9 @@ for epoch in range(args.Nepoch):
         ktruth = cp.fft.ifftshift(truth_gpu, axes=(-3, -2, -1))
         ktruth = cp.fft.fftn(ktruth, axes=(-3, -2, -1))
         ktruth = cp.fft.fftshift(ktruth, axes=(-3, -2, -1))
-        kedge_len = 30
-        kedge = ktruth[:kedge_len, :kedge_len, :kedge_len]
+        kedge = ktruth * shell
         kedge = kedge.reshape((-1,))
+        kedge = kedge[np.nonzero(kedge)]
         sigma_est_real = np.median(np.abs(np.real(kedge)))
         sigma_est_imag = np.median(np.abs(np.imag(kedge)))
         sigma_real = gaussian_level * sigma_est_real
