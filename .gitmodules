@@ -1,0 +1,3 @@
+[submodule "yanufft"]
+	path = yanufft
+	url = https://github.com/kmjohnson3/yanufft.git
