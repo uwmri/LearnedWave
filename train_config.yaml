@@ -1,0 +1,35 @@
+data_folder_train: "/path/to/train/data"
+data_folder_val: "/path/to/val/data"
+
+log_dir: "/mnt/PURENFS/cxt004/2Dsampling/run_cs"
+wave_dir: "."
+
+n_epochs: 3000
+r: 6
+cycles: 8
+nro: 1000
+acc: 16.0
+unroll: 6
+
+patch_size: [128, 128, 128]
+overlap: [20, 20, 20]
+
+in_channel: 1
+out_channel: 1
+true_complex: true
+fmaps: 16
+
+learning_rate: 0.001
+learning_rate_coords: 0.0001
+weight_decay: 0.0001
+
+num_coils: 12
+pname: "wave"
+resume_train: false
+
+Ntrial0: 1111
+Nepoch0: 10
+scale_global0: 1.0
+
+gaussian_lower: 0.5
+gaussian_uppper: 1.5
