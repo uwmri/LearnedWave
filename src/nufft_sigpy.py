@@ -11,7 +11,7 @@ from sigpy.pytorch import to_pytorch, from_pytorch
 import torch
 from sympy.codegen.ast import String
 from torch import Tensor
-
+from yanufft.yanufft.ops import nufft
 
 
 os.environ["CUPY_CACHE_SAVE_CUDA_SOURCE"] = "1"

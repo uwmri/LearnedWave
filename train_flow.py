@@ -474,12 +474,10 @@ class FlowTrainer:
                             hf.create_dataset(f"eval_truth_mag", data=np.squeeze(np.abs(truth)))
                         hf.create_dataset(f"eval_im_epoch{epoch}_mag", data=np.squeeze(np.abs(im.detach().cpu().numpy())))
 
-                self.writer_val.add_scalar('LossMSE',  eval_avg.avg(), epoch)
 
                 del im, y
                 torch.cuda.empty_cache()
-
-
+            self.writer_val.add_scalar('LossMSE',  eval_avg.avg(), epoch)
             logging.info("Validation epoch %d", epoch)
 
     def run(self) -> None:
