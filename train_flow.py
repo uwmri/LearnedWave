@@ -252,7 +252,7 @@ class FlowTrainer:
             clear_gpu_mem()
         return im
 
-    def _get_full_coords(self, kxc, kyc, kzc, readout, theta, radius_scale):
+    def _get_full_coords(self, kxc, kyc, kzc, theta, radius_scale):
         """
 
         :param kxc, kyc, kzc: All 1D torch tensor of length Num_views. Coordinates of the helix centers
@@ -263,10 +263,10 @@ class FlowTrainer:
         """
         num_views = kxc.shape[0]
         coords_centers = torch.stack((kxc, kyc, kzc), axis=1)
-        readout_torch = torch.from_numpy(readout.copy()).cuda()
+        readout_torch = torch.from_numpy(self.helix.copy()).cuda()
 
 
-        coord = torch.zeros(readout.shape + (num_views,), dtype=torch.float32).cuda()
+        coord = torch.zeros(self.helix.shape + (num_views,), dtype=torch.float32).cuda()
         for v in range(num_views):
             rot = torch.stack((torch.tensor(1., device='cuda'), torch.tensor(0., device='cuda'), torch.tensor(0., device='cuda'),
                                torch.tensor(0., device='cuda'), torch.cos(theta[v]), -torch.sin(theta[v]),

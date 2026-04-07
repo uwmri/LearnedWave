@@ -183,48 +183,28 @@ class BlockWiseCNN(nn.Module):
         return self.denoiser(x, mode='nonblock')
 
     def forward(self, x):
-
+        N = [i + j for i, j in zip(self.patch_size, self.overlap)]
+        Ns = list(self.patch_size)
         out = torch.zeros_like(x)
-
-        patch_in = [p + o for p, o in zip(self.patch_size, self.overlap)]
-        half_overlap = [o // 2 for o in self.overlap]
-
-
-        # reflection pad the volume so that patches near the borders have enough context
-        pad = (
-            half_overlap[2], half_overlap[2],
-            half_overlap[1], half_overlap[1],
-            half_overlap[0], half_overlap[0],
-        )
-        x_pad = F.pad(x, pad=pad, mode="reflect")
-
-
-
         dims = x.shape[-3:]
-        starts = [self._get_starts(d, p) for d, p in zip(dims, self.patch_size)]
-
-        for z in starts[0]:
-            for y in starts[1]:
-                for x0 in starts[2]:
-                    patch = x_pad[
-                            ...,
-                            z: z + patch_in[0],
-                            y: y + patch_in[1],
-                            x0: x0 + patch_in[2],
-                            ]
+    
+        for z in sorted({0, max(0, dims[0] - N[0])}):
+            for y in sorted({0, max(0, dims[1] - N[1])}):
+                for x0 in sorted({0, max(0, dims[2] - N[2])}):
+                    patch = x[..., z:z+N[0], y:y+N[1], x0:x0+N[2]]
                     patch = checkpoint.checkpoint(
                         self.run_function, patch, use_reentrant=self.use_reentrant
                     )
-                    out[
-                    ...,
-                    z: z + self.patch_size[0],
-                    y: y + self.patch_size[1],
-                    x0: x0 + self.patch_size[2],
-                    ] = patch[
-                        ...,
-                        half_overlap[0]: half_overlap[0] + self.patch_size[0],
-                        half_overlap[1]: half_overlap[1] + self.patch_size[1],
-                        half_overlap[2]: half_overlap[2] + self.patch_size[2],
-                        ]
-
+                    oz = 0 if z == 0 else N[0] - Ns[0]
+                    oy = 0 if y == 0 else N[1] - Ns[1]
+                    ox = 0 if x0 == 0 else N[2] - Ns[2]
+                    out[...,
+                        z+oz : z+oz+Ns[0],
+                        y+oy : y+oy+Ns[1],
+                        x0+ox : x0+ox+Ns[2],
+                    ] = patch[...,
+                        oz : oz+Ns[0],
+                        oy : oy+Ns[1],
+                        ox : ox+Ns[2],
+                    ]
         return out

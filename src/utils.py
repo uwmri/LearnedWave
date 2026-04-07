@@ -1,7 +1,8 @@
+# util funcs for np/cp arrays
+
 import numpy as np
 import sigpy as sp
 import cupy as cp
-import torch
 import logging
 import math
 
