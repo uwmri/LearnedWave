@@ -55,8 +55,10 @@ class TrainConfig:
     true_complex: bool = True
     fmaps: int = 16
     learning_rate: float = 1e-3
-    learning_rate_coords: float = 1e-4
-    weight_decay: float = 1e-4
+    learning_rate_coords: float = 2e-3
+    learning_rate_theta: float = 1e-3
+    learning_rate_radius: float = 2e-4
+    weight_decay: float = 0.0
     num_coils: int = 12
     pname: str = "wave"
     resume_train: bool = False
@@ -126,8 +128,6 @@ class FlowTrainer:
                 self.cfg.log_dir, f'scale_rot_{self.cfg.Ntrial0}_{self.cfg.Nepoch0}.txt'),
                 delimiter=',', unpack=True)
             self.radius_scale = torch.from_numpy(self.radius_scale).cuda()
-            with torch.no_grad():
-                self.radius_scale = torch.atanh(self.radius_scale)
             self.theta = torch.from_numpy(self.theta).cuda()
             self.radius_scale.requires_grad = True
             self.theta.requires_grad = True
@@ -158,21 +158,16 @@ class FlowTrainer:
         self.denoiser = ResBlock(self.cfg.in_channel, self.cfg.out_channel, self.cfg.fmaps,
                                  true_complex=self.cfg.true_complex)
         self.denoiser_bw = BlockWiseCNN(self.denoiser, self.cfg.patch_size, self.cfg.overlap).to(self.device)
-        self.optimizer = torch.optim.Adam(
-            [{'params': self.denoiser_bw.parameters()},
-             {'params': self.scale_global},
-             {'params': self.radius_scale},
-             {'params': self.theta},
-             {'params': self.kyc, 'lr': self.cfg.learning_rate_coords},
-             {'params': self.kzc, 'lr': self.cfg.learning_rate_coords}
-             ], lr=self.cfg.learning_rate, weight_decay=self.cfg.weight_decay
+
+        self.trajectory_params = [self.kyc, self.kzc, self.theta, self.radius_scale]
+        self.optimizer = torch.optim.AdamW(
+            [{'params': self.denoiser_bw.parameters(), 'weight_decay': self.cfg.weight_decay},
+             {'params': [self.scale_global]},
+             {'params': [self.kyc, self.kzc], 'lr': self.cfg.learning_rate_coords},
+             {'params': [self.theta], 'lr': self.cfg.learning_rate_theta},
+             {'params': [self.radius_scale], 'lr': self.cfg.learning_rate_radius}],
+            lr=self.cfg.learning_rate, weight_decay=0.0
         )
-
-        self.activationC = torch.nn.Hardtanh(min_val=-XRES / 2, max_val=XRES / 2, inplace=False)
-
-        self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, mode='min',
-                                                                    factor=0.1, patience=5, threshold=1e-4,
-                                                                    threshold_mode='abs')
 
         if self.cfg.resume_train:
             ptfile = os.path.join(self.cfg.log_dir, f'denoiser_{self.cfg.Ntrial0}_{self.cfg.Nepoch0}.pt')
@@ -262,7 +257,7 @@ class FlowTrainer:
         :return: coord: (N_views * Nro, 3) tensor on cuda
         """
         num_views = kxc.shape[0]
-        coords_centers = torch.stack((kxc, kyc, kzc), axis=1)
+        coords_centers = torch.stack((kxc, kyc, kzc), dim=1)
         readout_torch = torch.from_numpy(self.helix.copy()).cuda()
 
 
@@ -294,9 +289,6 @@ class FlowTrainer:
             self.optimizer.zero_grad()
 
             gaussian_level = random.uniform(self.cfg.gaussian_lower, self.cfg.gaussian_uppper)
-            radius_scale_clamp = torch.tanh(self.radius_scale)
-            kyc_clamp = self.activationC(self.kyc)
-            kzc_clamp = self.activationC(self.kzc)
 
             # caseID<19 are FE enhanced scans (5pt encoding)
             # caseID>19 are non-contrast (4pt encoding)
@@ -324,8 +316,8 @@ class FlowTrainer:
             smaps_tensor = torch.from_numpy(smaps.copy()).type(torch.complex64)
             smaps_tensor.requires_grad = False
 
-            coord = self._get_full_coords(self.kxc, kyc_clamp, kzc_clamp, self.theta, radius_scale_clamp)
-            kw = self._get_kw(kyc_clamp.shape[0])
+            coord = self._get_full_coords(self.kxc, self.kyc, self.kzc, self.theta, self.radius_scale)
+            kw = self._get_kw(self.kyc.shape[0])
 
             # initial guess
             im = torch.zeros([XRES, YRES, ZRES], dtype=torch.complex64, device='cuda', requires_grad=True)
@@ -341,6 +333,10 @@ class FlowTrainer:
             lossMSE = (im.squeeze() - truth_tensor.squeeze()).abs().pow(2).sum().pow(0.5) / truth_tensor.abs().pow(2).sum().pow(0.5)
             lossMSE.backward(retain_graph=True)
             self.optimizer.step()
+            with torch.no_grad():
+                self.kyc.clamp_(-YRES / 2, YRES / 2)
+                self.kzc.clamp_(-ZRES / 2, ZRES / 2)
+                self.radius_scale.clamp_(0, 1)
             train_avg.update(lossMSE.detach().item())
             logging.info(f'Epoch {epoch} lossMSE =  {lossMSE.detach().item()}')
 
@@ -361,7 +357,7 @@ class FlowTrainer:
             pass
         torch.save(denoiserstate, denoiserfile)
 
-        centers = np.stack((kyc_clamp.detach().cpu().numpy(), kzc_clamp.detach().cpu().numpy() ), axis=1)
+        centers = np.stack((self.kyc.detach().cpu().numpy(), self.kzc.detach().cpu().numpy() ), axis=1)
         coordsfile = os.path.join(self.cfg.log_dir, f'centers_opt_3D_{self.Ntrial}.txt')
         try:
             os.remove(coordsfile)
@@ -369,7 +365,7 @@ class FlowTrainer:
             pass
         np.savetxt(coordsfile, centers, fmt='%f', delimiter=",")
 
-        scalerot = np.stack((radius_scale_clamp.detach().cpu().numpy(), self.theta.detach().cpu().numpy()), axis=1)
+        scalerot = np.stack((self.radius_scale.detach().cpu().numpy(), self.theta.detach().cpu().numpy()), axis=1)
         scalerotfile = os.path.join(self.cfg.log_dir, f'scale_rot_{self.Ntrial}.txt')
         try:
             os.remove(scalerotfile)
@@ -380,8 +376,8 @@ class FlowTrainer:
         # plot sampling patterns on tensorboard and save training images
         if epoch % 5 == 0 or epoch == self.cfg.n_epochs - 1:
             rotplt, rotax = plt.subplots(figsize=(6, 6))
-            rotscatter = rotax.scatter(kyc_clamp.detach().cpu().numpy() ,
-                                       kzc_clamp.detach().cpu().numpy() ,
+            rotscatter = rotax.scatter(self.kyc.detach().cpu().numpy() ,
+                                       self.kzc.detach().cpu().numpy() ,
                                        c=self.theta.detach().cpu().numpy(), s=3, alpha=0.7)
             rotlegend = rotax.legend(*rotscatter.legend_elements(num=4),
                                      loc="upper right", title="Theta")
@@ -389,7 +385,7 @@ class FlowTrainer:
             self.writer_train.add_figure('theta', rotplt, epoch)
 
             rotpltzoom, ax = plt.subplots(figsize=(6, 6))
-            scatter = ax.scatter(kyc_clamp.detach().cpu().numpy(), kzc_clamp.detach().cpu().numpy(),
+            scatter = ax.scatter(self.kyc.detach().cpu().numpy(), self.kzc.detach().cpu().numpy(),
                                  c=self.theta.detach().cpu().numpy(), s=10, alpha=0.7, cmap='Spectral')
             plt.xlim(-15, 15)
             plt.ylim(-15, 15)
@@ -399,16 +395,16 @@ class FlowTrainer:
             self.writer_train.add_figure('theta_zoom', rotpltzoom, epoch)
 
             scalerotplt, ax = plt.subplots(figsize=(6, 6))
-            scatter = ax.scatter(kyc_clamp.detach().cpu().numpy(), kzc_clamp.detach().cpu().numpy() ,
-                                 c=radius_scale_clamp.detach().cpu().numpy() * self.cfg.r, s=3, alpha=0.7)
+            scatter = ax.scatter(self.kyc.detach().cpu().numpy(), self.kzc.detach().cpu().numpy() ,
+                                 c=self.radius_scale.detach().cpu().numpy() * self.cfg.r, s=3, alpha=0.7)
             legend = ax.legend(*scatter.legend_elements(num=4),
                                loc="upper right", title="Radius")
             ax.add_artist(legend)
             self.writer_train.add_figure('radius', scalerotplt, epoch)
 
             scalerotpltzoom, ax = plt.subplots(figsize=(6, 6))
-            scatter = ax.scatter(kyc_clamp.detach().cpu().numpy() , kzc_clamp.detach().cpu().numpy() ,
-                                 c=radius_scale_clamp.detach().cpu().numpy() * self.cfg.r, s=10, alpha=0.7, cmap='Spectral')
+            scatter = ax.scatter(self.kyc.detach().cpu().numpy() , self.kzc.detach().cpu().numpy() ,
+                                 c=self.radius_scale.detach().cpu().numpy() * self.cfg.r, s=10, alpha=0.7, cmap='Spectral')
             plt.xlim(-15, 15)
             plt.ylim(-15, 15)
             legend = ax.legend(*scatter.legend_elements(num=4),
@@ -427,9 +423,6 @@ class FlowTrainer:
         idx = [2,14,23,35]
         with torch.no_grad():
             for cs in range(num_cases_val):
-                radius_scale_clamp = torch.tanh(self.radius_scale)
-                kyc_clamp = self.activationC(self.kyc)
-                kzc_clamp = self.activationC(self.kzc)
 
                 i = idx[cs]
                 if i < 19:
@@ -450,8 +443,8 @@ class FlowTrainer:
                 smaps_tensor = torch.from_numpy(smaps.copy()).type(torch.complex64)
                 smaps_tensor.requires_grad = False
 
-                coord = self._get_full_coords(self.kxc, kyc_clamp, kzc_clamp, self.theta, radius_scale_clamp)
-                kw = self._get_kw(kyc_clamp.shape[0])
+                coord = self._get_full_coords(self.kxc, self.kyc, self.kzc, self.theta, self.radius_scale)
+                kw = self._get_kw(self.kyc.shape[0])
 
                 # initial guess
                 im = torch.zeros([XRES, YRES, ZRES], dtype=torch.complex64, device='cuda', requires_grad=False)

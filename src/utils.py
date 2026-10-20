@@ -10,72 +10,52 @@ def hann(x, width):
     xp = backend.get_array_module(x)
     return .5 * (1 - xp.cos(2*math.pi*(x-width/2)/width))
 
-def pca_coil_compression(kdata=None, axis=0, target_channels=None):
+def pca_coil_compression(kdata=None, axis=0, target_channels=None, sample_frac=0.05, seed=0):
+
+    """Compress coils to their ``target_channels`` principal components.
+
+    Args:
+        kdata: array with coils along ``axis``, or a list of such arrays (one
+            per encoding). For a list, the compression matrix is estimated from
+            entry 0 and applied to every entry, so all encodings share virtual
+            coils.
+        target_channels: channels to keep (all, reordered by energy, if None).
+        sample_frac: fraction of samples used to estimate the coil covariance.
+
+    Returns:
+        The same structure with ``target_channels`` along ``axis``.
+    """
+
     logger = logging.getLogger('PCA_CoilCompression')
 
     if isinstance(kdata, list):
         logger.info('Passed k-space is a list, using encode 0 for compression')
-        kdata_cc = kdata[0]
-    else:
-        kdata_cc = kdata
 
-    logger.info(f'Compressing to {target_channels} channels, along axis {axis}')
-    logger.info(f'Initial  size = {kdata_cc.shape} ')
-
-    # Put channel to first axis
-    kdata_cc = np.moveaxis(kdata_cc, axis, -1)
-    old_channels = kdata_cc.shape[-1]
-    logger.info(f'Old channels =  {old_channels} ')
+    ref = kdata[0] if isinstance(kdata, list) else kdata    # ref (C, ...)
+    ref = np.moveaxis(ref, axis, -1)                        # ref (..., C)
+    num_coils = ref.shape[-1]
 
     # Subsample to reduce memory for SVD
-    mask_shape = np.array(kdata_cc.shape)
-    mask = np.random.choice([True, False], size=mask_shape[:-1], p=[0.05, 1 - 0.05])
+    rng = np.random.default_rng(seed)
+    mask = rng.random(ref.shape[:-1]) < sample_frac         
 
-    # Create a subsampled array
-    kcc = np.zeros((old_channels, np.sum(mask)), dtype=kdata_cc.dtype)
-    logger.info(f'Kcc Shape = {kcc.shape} ')
-    for c in range(old_channels):
-        ktemp = kdata_cc[..., c]
-        kcc[c, :] = ktemp[mask]
+    kcc = ref[mask].T  # (C, # of true values, flattened)
+    logger.info(f"PCA coil compression {num_coils} -> {target_channels} "
+                f"from {kcc.shape[1]} samples")
+    u, s, _ = np.linalg.svd(kcc, full_matrices=False)       # u (C, C), s (C,), Vh (C, n_samples)
+    logger.info(f"singular values: {s}")
+    proj = u.conj().T[:target_channels]  # (target, C)
 
-    kdata_cc = np.moveaxis(kdata_cc, -1, axis)
-
-    #  SVD decomposition
-    logger.info(f'Working on SVD of {kcc.shape}')
-    u, s, vh = np.linalg.svd(kcc, full_matrices=False)
-
-    logger.info(f'S = {s}')
+    def apply(k):
+        k = np.moveaxis(k, axis, -1)                        # k (..., C)
+        k = k @ proj.T                                      # k (..., target_channels)
+        return np.moveaxis(k, -1, axis)                     # k with target_channels along original axis
 
     if isinstance(kdata, list):
-        logger.info('Passed k-space is a list, using encode 0 for compression')
+        return [apply(k) for k in kdata]
+    return apply(kdata)
 
-        for e in range(len(kdata)):
-            kdata[e] = np.moveaxis(kdata[e], axis, -1)
-            kdata[e] = np.expand_dims(kdata[e], -1)
-            logger.info(f'Shape = {kdata[e].shape}')
-            kdata[e] = np.matmul(u, kdata[e])
-            kdata[e] = np.squeeze(kdata[e], axis=-1)
-            kdata[e] = kdata[e][..., :target_channels]
-            kdata[e] = np.moveaxis(kdata[e], -1, axis)
 
-        for ksp in kdata:
-            logger.info(f'Final Shape {ksp.shape}')
-    else:
-        # Now iterate over and multiply by u
-        kdata = np.moveaxis(kdata, axis, -1)
-        kdata = np.expand_dims(kdata, -1)
-        kdata = np.matmul(u, kdata)
-        logger.info(f'Shape = {kdata.shape}')
-
-        # Crop to target channels
-        kdata = np.squeeze(kdata, axis=-1)
-        kdata = kdata[..., :target_channels]
-
-        # Put back
-        kdata = np.moveaxis(kdata, -1, axis)
-        logger.info(f'Final shape = {kdata.shape}')
-
-    return kdata
 
 def add_gaussian_noise(image,  level, percent=5):
     """
