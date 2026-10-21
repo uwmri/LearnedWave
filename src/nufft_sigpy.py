@@ -81,10 +81,10 @@ class Nufft_op3D():
         self.ncoils = smaps.shape[0]
 
         if coord.requires_grad:
-            self.xx = torch.arange(self.nx, device=self.device, dtype=self.torch_dtype) - self.nx / 2.
-            self.xy = torch.arange(self.ny, device=self.device, dtype=self.torch_dtype) - self.ny / 2.
-            self.xz = torch.arange(self.nz, device=self.device, dtype=self.torch_dtype) - self.nz / 2.
-            self.XX, self.XY, self.XZ = torch.meshgrid(self.xx, self.xy, self.xz)
+            self.xx = torch.arange(self.nx, device=self.device, dtype=self.torch_dtype) - self.nx // 2
+            self.xy = torch.arange(self.ny, device=self.device, dtype=self.torch_dtype) - self.ny // 2
+            self.xz = torch.arange(self.nz, device=self.device, dtype=self.torch_dtype) - self.nz // 2
+            self.XX, self.XY, self.XZ = torch.meshgrid(self.xx, self.xy, self.xz, indexing="ij")
 
     def forward(self, im: Tensor) -> Tensor:
 
@@ -108,11 +108,11 @@ class Nufft_op3D():
         # CT 03/2023 implementation of Guanhua's paper. See original nufftbindings for Alban's method.
         # The results are the same.
         xrd = to_pytorch(self.A * from_pytorch(vec_fx))
-        grad[:, 0] = ((torch.conj(xrd.mul_(0 - 1j)).mul_(g)).real * 2).sum(axis=0)
+        grad[:, 0] = (2 * math.pi / self.nx) * (torch.conj(xrd.mul_(0 - 1j)).mul_(g)).real.sum(axis=0)
         xrd = to_pytorch(self.A * from_pytorch(vec_fy))
-        grad[:, 1] = ((torch.conj(xrd.mul_(0 - 1j)).mul_(g)).real * 2).sum(axis=0)
+        grad[:, 1] = (2 * math.pi / self.ny) * (torch.conj(xrd.mul_(0 - 1j)).mul_(g)).real.sum(axis=0)
         xrd = to_pytorch(self.A * from_pytorch(vec_fz))
-        grad[:, 2] = ((torch.conj(xrd.mul_(0 - 1j)).mul_(g)).real * 2).sum(axis=0)
+        grad[:, 2] = (2 * math.pi / self.nz) * (torch.conj(xrd.mul_(0 - 1j)).mul_(g)).real.sum(axis=0)
 
         return grad
 
@@ -125,10 +125,10 @@ class Nufft_op3D():
 
         # CT 03/2023 implementation of Guanhua's paper. See original nufftbindings for Alban's method
         tmp = to_pytorch(self.A * from_pytorch(vecx_grad_output))
-        grad[:, 0] = ((tmp.mul_(torch.conj(y) * (0 - 1j))).real * 2).sum(axis=0)
+        grad[:, 0] = (2 * math.pi / self.nx) * (tmp.mul_(torch.conj(y) * (0 - 1j))).real.sum(axis=0)
         tmp = to_pytorch(self.A * from_pytorch(vecy_grad_output))
-        grad[:, 1] = ((tmp.mul_(torch.conj(y) * (0 - 1j))).real * 2).sum(axis=0)
+        grad[:, 1] = (2 * math.pi / self.ny) * (tmp.mul_(torch.conj(y) * (0 - 1j))).real.sum(axis=0)
         tmp = to_pytorch(self.A * from_pytorch(vecz_grad_output))
-        grad[:, 2] = ((tmp.mul_(torch.conj(y) * (0 - 1j))).real * 2).sum(axis=0)
+        grad[:, 2] = (2 * math.pi / self.nz) * (tmp.mul_(torch.conj(y) * (0 - 1j))).real.sum(axis=0)
 
         return grad
